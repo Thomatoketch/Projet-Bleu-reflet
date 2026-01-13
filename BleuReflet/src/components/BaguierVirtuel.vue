@@ -77,7 +77,7 @@ const resultDisplayed = ref(false);
 const resultEU = ref(null);
 const resultUS = ref(null);
 
-// Configuration et Variables globales (comme dans interaction.js)
+// Configuration
 const fingers = [
   { key: 'thumb', label: 'Pouce' },
   { key: 'index', label: 'Index' },
@@ -91,13 +91,49 @@ const maxMeasurements = 10;
 let diameterMeasurements = [];
 let handsDetector = null;
 let camera = null;
-const toleranceFactor = 0.1; // Supposé d'après le contexte du code original (variable manquante dans l'extrait mais utilisée)
 
-// --- Méthodes ---
+// --- NOUVEAU : Communication Backend ---
+
+// 1. Récupérer l'ID Client depuis l'URL (ex: ?client=Pandora)
+const getClientId = () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get('client') || 'Unknown_Client';
+};
+
+// 2. Envoyer les données au serveur Node.js
+const sendDataToBackend = async (sizeEU, sizeUS, diameter) => {
+    const measurementData = {
+        clientId: getClientId(),
+        fingerName: currentFinger.value,
+        sizeEU: sizeEU,
+        sizeUS: sizeUS,
+        diameterMm: diameter,
+        detectionMode: "Standard",
+        deviceModel: navigator.userAgent, 
+        sessionDurationSeconds: 0 
+    };
+
+    console.log("Envoi des données au backend...", measurementData);
+
+    try {
+        // Envoie une requête POST au serveur (port 3000 par défaut)
+        const response = await fetch('http://localhost:3000/api/measurements', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(measurementData)
+        });
+        
+        const result = await response.json();
+        console.log("✅ Données sauvegardées dans MongoDB:", result);
+    } catch (error) {
+        console.error("❌ Erreur lors de l'envoi:", error);
+    }
+};
+
+// --- Méthodes Existantes ---
 
 const openModal = () => {
   isModalOpen.value = true;
-  // Petit délai pour s'assurer que le DOM de la vidéo est prêt
   setTimeout(() => initMediaPipe(), 100);
 };
 
@@ -106,7 +142,7 @@ const closeModal = () => {
   stopCamera();
 };
 
-const initMediaPipe = () => {
+const initMediaPipe = async () => { 
   if (!videoElement.value) return;
 
   handsDetector = new Hands({
@@ -122,106 +158,90 @@ const initMediaPipe = () => {
 
   handsDetector.onResults(onResults);
 
-  camera = new Camera(videoElement.value, {
-    onFrame: async () => {
-      if (handsDetector && videoElement.value) {
-        await handsDetector.send({ image: videoElement.value });
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'user', 
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       }
-    },
-    width: 1280,
-    height: 720
-  });
-  camera.start();
+    });
+
+    videoElement.value.srcObject = stream;
+    videoElement.value.onloadedmetadata = () => {
+      videoElement.value.play();
+      requestAnimationFrame(predictWebcam);
+    };
+  } catch (err) {
+    console.error("Erreur caméra :", err);
+    alert("Impossible d'accéder à la caméra.");
+  }
+};
+
+const predictWebcam = async () => {
+  if (videoElement.value && handsDetector && isModalOpen.value) {
+    if (videoElement.value.videoWidth > 0 && videoElement.value.videoHeight > 0) {
+        await handsDetector.send({ image: videoElement.value });
+    }
+    requestAnimationFrame(predictWebcam);
+  }
 };
 
 const stopCamera = () => {
-  if (camera && videoElement.value && videoElement.value.srcObject) {
+  if (videoElement.value && videoElement.value.srcObject) {
      const stream = videoElement.value.srcObject;
-     const tracks = stream.getTracks();
-     tracks.forEach(track => track.stop());
+     stream.getTracks().forEach(track => track.stop());
   }
 };
 
-// Logique issue de interaction.js : onResults
 const onResults = (results) => {
   if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-      // Pas de main
-      if (!handDetected.value) { 
-          // Si on n'avait pas de main avant, on garde le message initial
-          showInitialMessage.value = true; 
-      }
-      // Note: interaction.js original ne remettait pas showInitialMessage à true si la main partait, 
-      // il cachait juste handMap. Je respecte la logique "Si pas de main -> return".
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length === 0) {
-        // console.log('Pas de landmarks'); 
-      }
+      if (!handDetected.value) showInitialMessage.value = true; 
       return;
   }
 
-  // Main détectée
-  showInitialMessage.value = false; // "initialMessage.style.display = 'none'"
-  handDetected.value = true;      // "handMapElement.style.display = 'block'"
+  showInitialMessage.value = false; 
+  handDetected.value = true;      
 
   const landmarks = results.multiHandLandmarks[0];
-
-  // 1. Classification main gauche/droite
   const handType = classifyHand(landmarks);
   updateHandMap(handType);
-
-  // 2. Estimation de la taille (Distance)
   estimateHandSize(landmarks);
 
-  // 3. Mesure si un doigt est choisi
   if (currentFinger.value !== 'None' && !resultDisplayed.value) {
       handleMeasurements(landmarks);
   }
 };
 
-// Logique issue de interaction.js : estimateHandSize
 const estimateHandSize = (landmarks) => {
     const wrist = landmarks[0];
     const middleFingerTip = landmarks[12];
-    
-    // Récupérer dimensions réelles vidéo pour convertir les coordonnées normalisées (0..1) en pixels
-    // Le code original utilisait des pixels directement car MediaPipe JS renvoie parfois des pixels selon config,
-    // mais ici via npm c'est souvent normalisé. On multiplie par la taille vidéo.
     const width = videoElement.value.videoWidth || 640;
     const height = videoElement.value.videoHeight || 480;
-
     const xDiff = (middleFingerTip.x - wrist.x) * width;
     const yDiff = (middleFingerTip.y - wrist.y) * height;
-
     const handSize = Math.sqrt(Math.pow(xDiff, 2) + Math.pow(yDiff, 2));
 
-    // Valeurs du fichier interaction.js
     const expectedHandSizeAt25cm = 170;
     const minHandSizeAt25cm = 140;
     const maxHandSizeAt25cm = 190;
     const distanceFactor = handSize / expectedHandSizeAt25cm;
-    const tol = 0.1; // toleranceFactor
+    const tol = 0.1;
 
     let msg = "";
-    if (handSize < minHandSizeAt25cm) {
-        msg = "Rapprochez votre main.";
-    } else if (handSize > maxHandSizeAt25cm) {
-        msg = "Éloignez votre main.";
-    } else if (distanceFactor < 1 - tol) {
-        msg = "Rapprochez votre main.";
-    } else if (distanceFactor > 1 + tol) {
-        msg = "Éloignez votre main.";
-    } else {
+    if (handSize < minHandSizeAt25cm) msg = "Rapprochez votre main.";
+    else if (handSize > maxHandSizeAt25cm) msg = "Éloignez votre main.";
+    else if (distanceFactor < 1 - tol) msg = "Rapprochez votre main.";
+    else if (distanceFactor > 1 + tol) msg = "Éloignez votre main.";
+    else {
         msg = "Main bien positionnée.";
-        // Cache le message après 2 secondes si c'est bon
         setTimeout(() => {
-            if (distanceMessage.value === "Main bien positionnée.") {
-                distanceMessage.value = "";
-            }
+            if (distanceMessage.value === "Main bien positionnée.") distanceMessage.value = "";
         }, 2000);
     }
     distanceMessage.value = msg;
 };
 
-// Logique issue de interaction.js : classifyHand & updateHandMap
 const classifyHand = (landmarks) => {
     const thumbTip = landmarks[4];
     const wrist = landmarks[0];
@@ -229,14 +249,10 @@ const classifyHand = (landmarks) => {
 };
 
 const updateHandMap = (handType) => {
-    if (handType === "Right") {
-        currentHandFilter.value = "./images/filter_right.png";
-    } else {
-        currentHandFilter.value = "./images/filter_left.png";
-    }
+    if (handType === "Right") currentHandFilter.value = "./images/filter_right.png";
+    else currentHandFilter.value = "./images/filter_left.png";
 };
 
-// Logique issue de interaction.js : Mesures
 const handleMeasurements = (landmarks) => {
     if (resultDisplayed.value) return;
 
@@ -248,18 +264,19 @@ const handleMeasurements = (landmarks) => {
         const diameterMm = diameterPixels * pixelToMmRatio;
         diameterMeasurements.push(diameterMm);
 
-        if (diameterMeasurements.length > maxMeasurements) {
-            diameterMeasurements.shift();
-        }
+        if (diameterMeasurements.length > maxMeasurements) diameterMeasurements.shift();
 
-        // On affiche le résultat (ici simplifié : on prend la dernière ou moyenne)
-        // Dans interaction.js, il appelle getStabilizedDiameter()
-        const stabilized = diameterMeasurements.reduce((a,b)=>a+b,0) / diameterMeasurements.length;
-        
-        // Petite condition pour attendre stabilisation (ex: 5 frames)
+        // Une fois qu'on a assez de mesures
         if (diameterMeasurements.length >= 5) {
-            const { sizeEU, sizeUS } = getSize(stabilized);
+            const avgDiameter = diameterMeasurements.reduce((a,b)=>a+b,0) / diameterMeasurements.length;
+            const { sizeEU, sizeUS } = getSize(avgDiameter);
+            
+            // Affichage du résultat
             displayMeasurements(sizeEU, sizeUS);
+            
+            // --- ENVOI AU BACKEND ---
+            // C'est ici que la magie opère
+            sendDataToBackend(sizeEU, sizeUS, avgDiameter);
         }
     }
 };
@@ -290,7 +307,6 @@ const getFullFingerDiameter = (landmarks, finger, width, height) => {
 };
 
 const getSize = (diameter) => {
-    // Copie exacte des seuils de interaction.js
     if (diameter < 14) return {sizeEU: 44, sizeUS: 3};
     if (diameter < 14.3) return {sizeEU: 45, sizeUS: 3.5};
     if (diameter < 14.7) return {sizeEU: 46, sizeUS: 4};
@@ -330,10 +346,6 @@ const displayMeasurements = (eu, us) => {
 
 const selectFinger = (fingerKey) => {
     currentFinger.value = fingerKey;
-    // Si pas de résultat déjà affiché, la mesure se lance via onResults automatiquement
-    if (!resultDisplayed.value) {
-        // trigger logic is implicit in onResults check
-    }
 };
 
 const restart = () => {
@@ -341,10 +353,8 @@ const restart = () => {
     resultDisplayed.value = false;
     currentFinger.value = 'None';
     showInitialMessage.value = true;
-    handDetected.value = false; // Pour masquer le filtre main temporairement comme dans restart() original
-    setTimeout(() => {
-        // Le code original avait un petit timeout pour réafficher la main
-    }, 100);
+    handDetected.value = false; 
+    setTimeout(() => { }, 100);
 };
 
 onUnmounted(() => {
