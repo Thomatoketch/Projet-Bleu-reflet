@@ -539,7 +539,7 @@ h1 {
     font-size: 24px;
     font-family: Arial, sans-serif;
     text-align: center;
-    z-index: 20;
+    z-index: 2000;
 }
 
 /* Style de la bulle de résultat injectée via innerHTML dans l'original */
