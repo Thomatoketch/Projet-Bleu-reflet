@@ -174,6 +174,10 @@ function displayMeasurements(sizeEU, sizeUS) {
         return;
     }
 
+    // Modifications for Backend
+    const currentDiameter = getStabilizedDiameter();
+    sendDataToBackend(sizeEU, sizeUS, currentDiameter);
+
     resultText.innerHTML = `<span style="border-radius: 50%; width: 250px;
             height: 250px; opacity: .95; display: block; background-color: black; position: absolute;
             top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -332,3 +336,40 @@ function getSize(diameter) {
 
 
 
+
+// --- BACKEND CONNECTION ---
+
+function getClientId() {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('client') || 'Unknown_Client';
+}
+
+// Send data to your Node.js Server
+async function sendDataToBackend(sizeEU, sizeUS, diameter) {
+    const measurementData = {
+        clientId: getClientId(),
+        fingerName: currentFinger,
+        sizeEU: sizeEU,
+        sizeUS: sizeUS,
+        diameterMm: diameter,
+        detectionMode: "Standard",
+        deviceModel: navigator.userAgent, 
+        sessionDurationSeconds: 0 
+    };
+
+    console.log("Sending data to backend...", measurementData);
+
+    try {
+        // ⚠️ Change localhost to your real server URL when hosting online
+        const response = await fetch('http://localhost:3000/api/measurements', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(measurementData)
+        });
+        
+        const result = await response.json();
+        console.log("✅ Data saved in MongoDB:", result);
+    } catch (error) {
+        console.error("❌ Error sending data:", error);
+    }
+}
