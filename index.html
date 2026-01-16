@@ -180,7 +180,7 @@
             font-size: 24px;
             font-family: Arial, sans-serif;
             text-align: center;
-            z-index: 20;
+            z-index: 30;
         }
 
         #resultText {
@@ -248,6 +248,44 @@
 			opacity: 0.9;
 		}
 
+        #debugCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 25;
+            pointer-events: none;
+        }
+
+        #freezeCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            display: none;
+            pointer-events: none;
+            transform: scaleX(-1);
+        }
+
+        #resumeBtn {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 60;
+            display: none;
+            padding: 10px 14px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
     </style>
 </head>
 <body>
@@ -263,18 +301,25 @@
 
             <div id="videoContainer">
                 <video id="video" autoplay></video>
+                <!-- Canvas de freeze + debug -->
+                <canvas id="freezeCanvas"></canvas>
+
+                <canvas id="debugCanvas"></canvas>
+
+                <!-- Bouton reprendre -->
+                <button id="resumeBtn">Reprendre la mesure</button>
                 <img id="handMap" src="./images/hand_filter_left_top.png" alt="Contour de la main">
                 <div id="subtleMessage" style="display: none;"></div>
-				<!-- Cercle pour le message de la main (dynamique) -->
-				<div id="distanceCircle" class="hidden">
-					<span id="distanceText"></span>
-				</div>
+                <!-- Cercle pour le message de la main (dynamique) -->
+                <div id="distanceCircle" class="hidden">
+                    <span id="distanceText"></span>
+                </div>
 
-				<!-- Cercle pour le résultat -->
-				<div id="resultCircle" class="hidden">
-					<span id="resultText"></span>
-					<button id="newMeasurementButton" class="hidden" onclick="restart()">Nouvelle Mesure</button>
-				</div>
+                <!-- Cercle pour le résultat -->
+                <div id="resultCircle" class="hidden">
+                    <span id="resultText"></span>
+                    <button id="newMeasurementButton" class="hidden" onclick="restart()">Nouvelle Mesure</button>
+                </div>
             </div>
 
             <div id="fingerSelection">
