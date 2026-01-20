@@ -28,11 +28,15 @@
           <div id="resultCircle" :class="{ hidden: !resultDisplayed }">
             <span id="resultText">
               <span v-if="resultEU" class="result-bubble">
-                {{ resultEU }} EU | {{ resultUS }} US
+                <span style="font-size: 1.8rem; display:block;">{{ resultEU }}</span>
+                <span style="font-size: 0.8rem; display:block; margin-top:5px;">Ø {{ measuredDiameter }} mm</span>
+                <span style="font-size: 0.7rem; display:block; opacity:0.8; margin-top:5px;">
+                  Confiance : {{ confidenceLevel }}
+                </span>
               </span>
             </span>
             <button id="newMeasurementButton" :class="{ hidden: !resultDisplayed }" @click="restart">
-              Nouvelle Mesure
+              Recommencer
             </button>
           </div>
         </div>
@@ -53,9 +57,8 @@ import { ref, onUnmounted } from 'vue';
 import { Hands } from '@mediapipe/hands';
 import { Camera } from '@mediapipe/camera_utils';
 
-// --- NOUVEAUX IMPORTS ---
-// On importe les maths et l'API depuis les fichiers externes
-import { getRingSize, calculateFingerDiameter, PIXEL_TO_MM_RATIO, FINGERS_CONFIG } from '../utils/ringMath';
+// Import des nouvelles fonctions mathématiques
+import { getRingSize, calculateFingerDiameter, pixelsToMm, estimateRatioFromHand, FINGERS_CONFIG } from '../utils/ringMath';
 import { saveMeasurement } from '../services/api';
 
 // --- Données Réactives ---
@@ -67,13 +70,15 @@ const currentFinger = ref('None');
 const currentHandFilter = ref('./images/hand_filter_left_top.png');
 const distanceMessage = ref('');
 const resultDisplayed = ref(false);
-const resultEU = ref(null);
-const resultUS = ref(null);
 
-const maxMeasurements = 10;
+// Nouvelles données pour l'affichage
+const resultEU = ref(null);
+const measuredDiameter = ref(0);
+const confidenceLevel = ref('Moyenne');
+
+const maxMeasurements = 15;
 let diameterMeasurements = [];
 let handsDetector = null;
-let camera = null;
 
 // --- Méthodes ---
 
@@ -151,7 +156,7 @@ const onResults = (results) => {
   const landmarks = results.multiHandLandmarks[0];
   const handType = classifyHand(landmarks);
   updateHandMap(handType);
-  estimateHandSize(landmarks);
+  estimateHandSize(landmarks); // Garde le message de distance pour l'UX
 
   if (currentFinger.value !== 'None' && !resultDisplayed.value) {
     handleMeasurements(landmarks);
@@ -198,46 +203,63 @@ const updateHandMap = (handType) => {
   else currentHandFilter.value = "./images/filter_left.png";
 };
 
-// --- LOGIQUE DE MESURE MISE A JOUR ---
+// --- NOUVELLE LOGIQUE DE MESURE (SANS TOUCHER AU DESIGN) ---
 const handleMeasurements = (landmarks) => {
   if (resultDisplayed.value) return;
 
   const width = videoElement.value.videoWidth;
   const height = videoElement.value.videoHeight;
 
-  // Appel à la fonction mathématique importée
+  // 1. Estimation Algorithmique du ratio
+  const currentRatio = estimateRatioFromHand(landmarks, width, height);
+
+  // 2. Calcul des pixels du doigt
   const diameterPixels = calculateFingerDiameter(landmarks, currentFinger.value, width, height);
 
-  if (diameterPixels) {
-    // Utilisation de la constante importée
-    const diameterMm = diameterPixels * PIXEL_TO_MM_RATIO;
+  if (diameterPixels > 0) {
+    // 3. Conversion en mm
+    const diameterMm = pixelsToMm(diameterPixels, currentRatio);
+
     diameterMeasurements.push(diameterMm);
 
     if (diameterMeasurements.length > maxMeasurements) diameterMeasurements.shift();
 
-    if (diameterMeasurements.length >= 5) {
+    // On attend d'avoir assez de mesures
+    if (diameterMeasurements.length >= 10) {
       const avgDiameter = diameterMeasurements.reduce((a, b) => a + b, 0) / diameterMeasurements.length;
 
-      // Appel à la fonction mathématique importée
+      // Calcul de la confiance (Stabilité des mesures)
+      const variance = diameterMeasurements.reduce((a, b) => a + Math.pow(b - avgDiameter, 2), 0) / diameterMeasurements.length;
+      const stdDev = Math.sqrt(variance);
+      let conf = 'Faible';
+      if (stdDev < 0.5) conf = 'Haute';
+      else if (stdDev < 1.0) conf = 'Moyenne';
+
       const { sizeEU, sizeUS } = getRingSize(avgDiameter);
 
-      displayMeasurements(sizeEU, sizeUS);
+      if (sizeEU && sizeUS) {
+        // Mise à jour des variables d'affichage
+        resultEU.value = sizeEU;
+        measuredDiameter.value = avgDiameter.toFixed(1);
+        confidenceLevel.value = conf;
 
-      // Appel au service API importé
-      saveMeasurement({
-        fingerName: currentFinger.value,
-        sizeEU: sizeEU,
-        sizeUS: sizeUS,
-        diameterMm: avgDiameter
-      });
+        displayMeasurements();
+
+        saveMeasurement({
+          fingerName: currentFinger.value,
+          sizeEU: sizeEU,
+          sizeUS: sizeUS,
+          diameterMm: avgDiameter
+        });
+      } else {
+        // Si la mesure est aberrante, on recommence silencieusement
+        diameterMeasurements = [];
+      }
     }
   }
 };
 
-const displayMeasurements = (eu, us) => {
-  if (!eu || !us) return;
-  resultEU.value = eu;
-  resultUS.value = us;
+const displayMeasurements = () => {
   resultDisplayed.value = true;
 };
 
@@ -260,7 +282,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* Conserve ton style actuel, il est bon */
 .baguier-root {
   margin: 0;
   padding: 0;
