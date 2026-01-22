@@ -18,6 +18,16 @@
         <div id="videoContainer">
           <video ref="videoElement" id="video" autoplay playsinline></video>
 
+          <!-- Canvas de freeze + debug (du code 2) -->
+          <canvas ref="freezeCanvasEl" id="freezeCanvas"></canvas>
+          <canvas ref="debugCanvasEl" id="debugCanvas"></canvas>
+
+          <!-- Bouton reprendre (du code 2) -->
+          <button id="resumeBtn" @click="resumeMeasurement" v-show="isFrozen">
+            Reprendre la mesure
+          </button>
+
+          <!-- Hand map -->
           <img id="handMap" :src="currentHandFilter" alt="Contour de la main"
             :style="{ display: handDetected ? 'block' : 'none' }">
 
@@ -259,6 +269,49 @@ const handleMeasurements = (landmarks) => {
   }
 };
 
+function handleMeasurements2(landmarks) {
+  if (!currentFinger.value || currentFinger.value === "None") return;
+
+  const vw = videoElement.value?.videoWidth;
+  const vh = videoElement.value?.videoHeight;
+  if (!vw || !vh) return;
+
+  const t = FINGER_MEASURE_POS[currentFinger.value] ?? 0.55;
+  const frame = getFingerMeasurementFrame(landmarks, currentFinger.value, vw, vh, t);
+  if (!frame) return;
+
+  const thicknessData = measureFingerThicknessPixels(frame, currentFinger.value);
+
+  // freeze + debug (du code 2)
+  freezeOnCurrentFrame();
+  drawDebugPointsOnFreeze(frame, thicknessData);
+
+  if (!thicknessData) return;
+
+  const { mm: diameterMm } = computeDiameterMm({
+    thicknessPx: thicknessData.thicknessPx,
+    frameCenterPx: frame.center,
+    landmarks,
+    vw,
+    vh,
+  });
+
+  if (diameterMm == null || !Number.isFinite(diameterMm)) return;
+
+  diameterMeasurements.push(diameterMm);
+  if (diameterMeasurements.length > maxMeasurements) diameterMeasurements.shift();
+
+  const stabilizedDiameter = getStabilizedDiameter();
+  const { sizeEU, sizeUS } = getSizeFromDiameter(stabilizedDiameter);
+  displayMeasurements(sizeEU, sizeUS);
+  saveMeasurement({
+    fingerName: currentFinger.value,
+    sizeEU: sizeEU,
+    sizeUS: sizeUS,
+    diameterMm: stabilizedDiameter
+  });
+}
+
 const displayMeasurements = () => {
   resultDisplayed.value = true;
 };
@@ -279,6 +332,147 @@ const restart = () => {
 onUnmounted(() => {
   stopCamera();
 });
+
+// =====================
+// LiDAR Functions (from code 2)
+// =====================
+
+function findEdgePeakAlongNormal(center, normal, {
+  maxStepPx = 60,
+  stepPx = 1,
+  halfSize = 1,
+  minD = 4,
+  preferNear = true,
+} = {}) {
+  const samples = [];
+  const coords = [];
+
+  for (let t = 0; t <= maxStepPx; t += stepPx) {
+    const x = center.x + normal.x * t;
+    const y = center.y + normal.y * t;
+    coords.push({ x, y, t });
+    samples.push(getGrayAtPatch(x, y, halfSize));
+  }
+
+  const sm = smooth1D(samples, 2);
+  const grad = new Array(sm.length).fill(0);
+  for (let i = 1; i < sm.length; i++) grad[i] = Math.abs(sm[i] - sm[i - 1]);
+
+  const sorted = grad.slice().sort((a, b) => a - b);
+  const p90 = sorted[Math.floor(sorted.length * 0.90)] || 0;
+  const threshold = Math.max(6, p90 * 0.55);
+
+  const peaks = [];
+  for (let i = 2; i < grad.length - 2; i++) {
+    const t = coords[i].t;
+    if (t < minD) continue;
+
+    const g = grad[i];
+    const isLocalMax =
+      g > grad[i - 1] && g >= grad[i + 1] &&
+      g > grad[i - 2] && g >= grad[i + 2];
+
+    if (isLocalMax && g >= threshold) {
+      peaks.push({ i, t, score: g, x: coords[i].x, y: coords[i].y });
+    }
+  }
+  if (!peaks.length) return null;
+
+  let chosen = peaks[0];
+  for (const p of peaks) {
+    if (preferNear ? (p.t < chosen.t) : (p.score > chosen.score)) chosen = p;
+  }
+  return { x: chosen.x, y: chosen.y, t: chosen.t, score: chosen.score };
+}
+
+function measureFingerThicknessPixels(frame, fingerType) {
+  if (!updateTmpCanvasFromVideo()) return null;
+
+  const { center, normal: n, axis } = frame;
+  const len = axis ? Math.hypot(axis.x, axis.y) : null;
+
+  let maxStepPx, minD;
+  const params = (fingerType === "thumb") ? THICKNESS_PARAMS.thumb : THICKNESS_PARAMS.others;
+
+  if (len) {
+    maxStepPx = clamp(len * params.maxStepFactor, params.maxStepMin, params.maxStepMax);
+    minD = clamp(len * params.minDistFactor, params.minDistMin, params.minDistMax);
+  } else {
+    maxStepPx = params.fallbackMaxStep;
+    minD = params.fallbackMinDist;
+  }
+
+  const edgePos = findEdgePeakAlongNormal(center, n, {
+    maxStepPx, stepPx: 1, halfSize: 1, minD, preferNear: true,
+  });
+  const edgeNeg = findEdgePeakAlongNormal(center, { x: -n.x, y: -n.y }, {
+    maxStepPx, stepPx: 1, halfSize: 1, minD, preferNear: true,
+  });
+
+  if (!edgePos || !edgeNeg) return null;
+
+  const thicknessPx = edgePos.t + edgeNeg.t;
+  return {
+    thicknessPx,
+    edgeLeft: { x: edgeNeg.x, y: edgeNeg.y },
+    edgeRight: { x: edgePos.x, y: edgePos.y },
+  };
+}
+
+function smooth1D(values, k = 2) {
+  const n = values.length;
+  const out = values.slice();
+  for (let i = 0; i < n; i++) {
+    let sum = 0, count = 0;
+    for (let j = -k; j <= k; j++) {
+      const idx = i + j;
+      if (idx >= 0 && idx < n) { sum += values[idx]; count++; }
+    }
+    out[i] = sum / count;
+  }
+  return out;
+}
+
+function freezeOnCurrentFrame() {
+  const rect = videoElement.value.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+
+  const freezeCanvas = freezeCanvasEl.value;
+  freezeCanvas.width = Math.round(rect.width * dpr);
+  freezeCanvas.height = Math.round(rect.height * dpr);
+  freezeCanvas.style.width = rect.width + "px";
+  freezeCanvas.style.height = rect.height + "px";
+
+  freezeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  freezeCtx.clearRect(0, 0, rect.width, rect.height);
+  drawVideoCover(freezeCtx, videoElement.value, rect.width, rect.height);
+
+  debugCanvasEl.value.style.display = "none";
+  freezeCanvas.style.display = "block";
+  isFrozen.value = true;
+
+  videoElement.value.pause();
+  try { if (camera && camera.stop) camera.stop(); } catch { }
+  return true;
+}
+
+function resumeMeasurement() {
+  if (!isFrozen.value) return;
+
+  freezeCanvasEl.value.style.display = "none";
+  isFrozen.value = false;
+
+  debugCanvasEl.value.style.display = "block";
+
+  videoElement.value.play().catch(() => { });
+  try { if (camera && camera.start) camera.start(); } catch { }
+
+  // On remet l'utilisateur en mode “choix doigt” / “nouvelle mesure”
+  resultDisplayed.value = false;
+  resultEU.value = null;
+  resultUS.value = null;
+  currentFinger.value = "None";
+}
 </script>
 
 <style scoped>
