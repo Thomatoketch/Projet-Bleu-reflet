@@ -63,6 +63,17 @@
 </template>
 
 <script setup>
+
+const isFrozen = ref(false);
+let freezeCtx = null;
+let debugCtx = null;
+
+const THICKNESS_PARAMS = {
+  thumb: { maxStepMin: 40, maxStepMax: 85, maxStepFactor: 0.55, minDistMin: 8, minDistMax: 16, minDistFactor: 0.12, fallbackMaxStep: 65, fallbackMinDist: 8 },
+  others: { maxStepMin: 30, maxStepMax: 60, maxStepFactor: 0.35, minDistMin: 6, minDistMax: 12, minDistFactor: 0.08, fallbackMaxStep: 55, fallbackMinDist: 6 }
+};
+
+const FINGER_MEASURE_POS = { thumb: 0.30, index: 0.55, middle: 0.55, ring: 0.55, pinky: 0.65 };
 import { ref, onUnmounted } from 'vue';
 import { Hands } from '@mediapipe/hands';
 import { Camera } from '@mediapipe/camera_utils';
@@ -215,102 +226,63 @@ const updateHandMap = (handType) => {
 
 // --- NOUVELLE LOGIQUE DE MESURE (SANS TOUCHER AU DESIGN) ---
 const handleMeasurements = (landmarks) => {
-  if (resultDisplayed.value) return;
+  if (resultDisplayed.value || isFrozen.value) return;
 
   const width = videoElement.value.videoWidth;
   const height = videoElement.value.videoHeight;
 
-  // 1. Estimation Algorithmique du ratio
-  const currentRatio = estimateRatioFromHand(landmarks, width, height);
+  // 1. TENTATIVE MÉTHODE LiDAR (Précision bords)
+  const t = FINGER_MEASURE_POS[currentFinger.value] ?? 0.55;
+  const frame = getFingerMeasurementFrame(landmarks, currentFinger.value, width, height, t);
+  const thicknessData = frame ? measureFingerThicknessPixels(frame, currentFinger.value) : null;
 
-  // 2. Calcul des pixels du doigt
-  const diameterPixels = calculateFingerDiameter(landmarks, currentFinger.value, width, height);
+  let diameterMm = 0;
 
-  if (diameterPixels > 0) {
-    // 3. Conversion en mm
-    const diameterMm = pixelsToMm(diameterPixels, currentRatio);
+  if (thicknessData) {
+    // Si le LiDAR trouve les bords, on l'utilise
+    freezeOnCurrentFrame();
+    drawDebugPointsOnFreeze(frame, thicknessData);
 
-    diameterMeasurements.push(diameterMm);
-
-    if (diameterMeasurements.length > maxMeasurements) diameterMeasurements.shift();
-
-    // On attend d'avoir assez de mesures
-    if (diameterMeasurements.length >= 10) {
-      const avgDiameter = diameterMeasurements.reduce((a, b) => a + b, 0) / diameterMeasurements.length;
-
-      // Calcul de la confiance (Stabilité des mesures)
-      const variance = diameterMeasurements.reduce((a, b) => a + Math.pow(b - avgDiameter, 2), 0) / diameterMeasurements.length;
-      const stdDev = Math.sqrt(variance);
-      let conf = 'Faible';
-      if (stdDev < 0.5) conf = 'Haute';
-      else if (stdDev < 1.0) conf = 'Moyenne';
-
-      const { sizeEU, sizeUS } = getRingSize(avgDiameter);
-
-      if (sizeEU && sizeUS) {
-        // Mise à jour des variables d'affichage
-        resultEU.value = sizeEU;
-        measuredDiameter.value = avgDiameter.toFixed(1);
-        confidenceLevel.value = conf;
-
-        displayMeasurements();
-
-        saveMeasurement({
-          fingerName: currentFinger.value,
-          sizeEU: sizeEU,
-          sizeUS: sizeUS,
-          diameterMm: avgDiameter
-        });
-      } else {
-        // Si la mesure est aberrante, on recommence silencieusement
-        diameterMeasurements = [];
-      }
+    // On peut utiliser votre pixelsToMm avec le ratio estimé ou un ratio fixe
+    const currentRatio = estimateRatioFromHand(landmarks, width, height);
+    diameterMm = pixelsToMm(thicknessData.thicknessPx, currentRatio);
+  } else {
+    // 2. REPLI : VOTRE MÉTHODE ORIGINALE (Ratio algorithmique)
+    const currentRatio = estimateRatioFromHand(landmarks, width, height);
+    const diameterPixels = calculateFingerDiameter(landmarks, currentFinger.value, width, height);
+    if (diameterPixels > 0) {
+      diameterMm = pixelsToMm(diameterPixels, currentRatio);
     }
+  }
+
+  // Traitement du résultat (commun aux deux méthodes)
+  if (diameterMm > 0) {
+    processFinalMeasurement(diameterMm);
   }
 };
 
-function handleMeasurements2(landmarks) {
-  if (!currentFinger.value || currentFinger.value === "None") return;
-
-  const vw = videoElement.value?.videoWidth;
-  const vh = videoElement.value?.videoHeight;
-  if (!vw || !vh) return;
-
-  const t = FINGER_MEASURE_POS[currentFinger.value] ?? 0.55;
-  const frame = getFingerMeasurementFrame(landmarks, currentFinger.value, vw, vh, t);
-  if (!frame) return;
-
-  const thicknessData = measureFingerThicknessPixels(frame, currentFinger.value);
-
-  // freeze + debug (du code 2)
-  freezeOnCurrentFrame();
-  drawDebugPointsOnFreeze(frame, thicknessData);
-
-  if (!thicknessData) return;
-
-  const { mm: diameterMm } = computeDiameterMm({
-    thicknessPx: thicknessData.thicknessPx,
-    frameCenterPx: frame.center,
-    landmarks,
-    vw,
-    vh,
-  });
-
-  if (diameterMm == null || !Number.isFinite(diameterMm)) return;
-
+const processFinalMeasurement = (diameterMm) => {
   diameterMeasurements.push(diameterMm);
   if (diameterMeasurements.length > maxMeasurements) diameterMeasurements.shift();
 
-  const stabilizedDiameter = getStabilizedDiameter();
-  const { sizeEU, sizeUS } = getSizeFromDiameter(stabilizedDiameter);
-  displayMeasurements(sizeEU, sizeUS);
-  saveMeasurement({
-    fingerName: currentFinger.value,
-    sizeEU: sizeEU,
-    sizeUS: sizeUS,
-    diameterMm: stabilizedDiameter
-  });
-}
+  if (diameterMeasurements.length >= 10) {
+    const avgDiameter = diameterMeasurements.reduce((a, b) => a + b, 0) / diameterMeasurements.length;
+    const { sizeEU, sizeUS } = getRingSize(avgDiameter);
+
+    if (sizeEU) {
+      resultEU.value = sizeEU;
+      measuredDiameter.value = avgDiameter.toFixed(1);
+      resultDisplayed.value = true;
+
+      saveMeasurement({
+        fingerName: currentFinger.value,
+        sizeEU: sizeEU,
+        sizeUS: sizeUS,
+        diameterMm: avgDiameter
+      });
+    }
+  }
+};
 
 const displayMeasurements = () => {
   resultDisplayed.value = true;
@@ -716,5 +688,41 @@ h1 {
   height: 250px;
   border-radius: 50%;
   opacity: 0.9;
+}
+
+#debugCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 25;
+  pointer-events: none;
+}
+
+#freezeCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 20;
+  display: none;
+  pointer-events: none;
+  transform: scaleX(-1);
+}
+
+#resumeBtn {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: 10px 14px;
+  background: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
 }
 </style>
