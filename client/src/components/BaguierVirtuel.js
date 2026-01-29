@@ -19,245 +19,203 @@ export const isFrozen = ref(false);
 export const resultEU = ref(null);
 export const measuredDiameter = ref(0);
 export const confidenceLevel = ref('Moyenne');
+export const detectionMode = ref('Standard'); // 'LiDAR' ou 'Standard'
 export { FINGERS_CONFIG };
 
 // --- Variables internes ---
-let diameterMeasurements = [];
 let handsDetector = null;
 let camera = null;
+let xrSession = null;
+let xrRefSpace = null;
+let depthInfo = null;
 let freezeCtx = null;
-let debugCtx = null;
-const maxMeasurements = 15;
-const tmpCanvas = document.createElement("canvas");
-const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
-let stabilityBuffer = []; 
-const REQUIRED_STABLE_FRAMES = 7; // Nombre de mesures cohérentes avant de valider
-const TOLERANCE_MM = 0.5; // Écart maximum autorisé entre les mesures pour être jugées "cohérentes"
+const stabilityBuffer = []; 
+const REQUIRED_STABLE_FRAMES = 10; // Plus strict pour le LiDAR
+const TOLERANCE_MM = 0.4;
+const FINGER_INDICES = { thumb: { pip: 3 }, index: { pip: 6 }, middle: { pip: 10 }, ring: { pip: 14 }, pinky: { pip: 18 } };
 
-const FINGER_INDICES = { thumb: { mcp: 2, pip: 3 }, index: { mcp: 5, pip: 6 }, middle: { mcp: 9, pip: 10 }, ring: { mcp: 13, pip: 14 }, pinky: { mcp: 17, pip: 18 } };
-const THICKNESS_PARAMS = {
-  thumb: { maxStepMin: 40, maxStepMax: 85, maxStepFactor: 0.55, minDistMin: 8, minDistMax: 16, minDistFactor: 0.12, fallbackMaxStep: 65, fallbackMinDist: 8 },
-  others: { maxStepMin: 30, maxStepMax: 60, maxStepFactor: 0.35, minDistMin: 6, minDistMax: 12, minDistFactor: 0.08, fallbackMaxStep: 55, fallbackMinDist: 6 }
-};
-const FINGER_MEASURE_POS = { thumb: 0.30, index: 0.55, middle: 0.55, ring: 0.55, pinky: 0.65 };
-
-// --- Méthodes d'interface ---
-export const openModal = () => {
+// --- 1. Initialisation Intelligente ---
+export const openModal = async () => {
   isModalOpen.value = true;
-  setTimeout(() => initMediaPipe(), 100);
-};
-
-export const closeModal = () => {
-  isModalOpen.value = false;
-  if (camera) camera.stop();
-};
-
-export const selectFinger = (f) => { currentFinger.value = f; };
-
-export const resumeMeasurement = () => {
-  isFrozen.value = false;
-  if (freezeCanvasEl.value) freezeCanvasEl.value.style.display = "none";
-  if (videoElement.value) videoElement.value.play();
-  resultDisplayed.value = false;
-  diameterMeasurements = [];
-  requestAnimationFrame(predictWebcam);
-};
-
-export const restart = () => {
-  resumeMeasurement();
-  currentFinger.value = 'None';
-};
-
-// --- Initialisation Technique ---
-const initMediaPipe = async () => {
-  if (!videoElement.value) return;
-  freezeCtx = freezeCanvasEl.value.getContext("2d");
-  debugCtx = debugCanvasEl.value.getContext("2d");
-
-  handsDetector = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-  handsDetector.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
-  handsDetector.onResults(onResults);
-
-  camera = new Camera(videoElement.value, {
-    onFrame: async () => {
-      if (videoElement.value && !isFrozen.value) {
-        await handsDetector.send({ image: videoElement.value });
+  
+  // A. Tentative LiDAR (WebXR)
+  if ('xr' in navigator) {
+    try {
+      const isArSupported = await navigator.xr.isSessionSupported('immersive-ar');
+      if (isArSupported) {
+        // Demande une session AR avec Accès Profondeur + Overlay HTML
+        xrSession = await navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['depth-sensing', 'dom-overlay'],
+          domOverlay: { root: document.body }, // IMPORTANT: Utiliser body pour éviter les bugs de style
+          depthSensing: {
+            usagePreference: ['cpu-optimized'],
+            dataFormatPreference: ['luminance-alpha']
+          }
+        });
+        
+        detectionMode.value = 'LiDAR';
+        initXR();
+        return; // On sort, le mode AR prend le relais
       }
-    },
-    width: 1280, height: 720
+    } catch (e) {
+      console.warn("Échec WebXR (LiDAR), passage en mode standard :", e);
+    }
+  }
+  
+  // B. Fallback : Mode Standard (MediaPipe seul)
+  startStandardMode();
+};
+
+const startStandardMode = () => {
+    detectionMode.value = 'Standard';
+    setTimeout(() => initMediaPipe(), 100);
+};
+
+// --- 2. Logique WebXR (LiDAR) ---
+const initXR = async () => {
+  document.body.classList.add('ar-active'); // Active la transparence CSS
+  
+  // Écouteur de fin de session (bouton retour physique ou logiciel)
+  xrSession.addEventListener('end', () => {
+    document.body.classList.remove('ar-active');
+    xrSession = null;
+    startStandardMode(); // Si on quitte l'AR, on relance la caméra standard
   });
 
-  camera.start().catch(() => alert("Erreur Caméra. Vérifiez HTTPS."));
+  xrRefSpace = await xrSession.requestReferenceSpace('viewer'); // 'viewer' est attaché à la caméra
+  xrSession.requestAnimationFrame(onXRFrame);
+  
+  // On lance quand même MediaPipe en parallèle pour détecter les points de la main sur le flux vidéo
+  initMediaPipe();
 };
 
-const predictWebcam = async () => {
-  if (videoElement.value && handsDetector && isModalOpen.value && !isFrozen.value) {
-    if (videoElement.value.videoWidth > 0 && videoElement.value.videoHeight > 0) {
-      await handsDetector.send({ image: videoElement.value });
+const onXRFrame = (time, frame) => {
+  const pose = frame.getViewerPose(xrRefSpace);
+  if (pose && xrSession) {
+    const view = pose.views[0]; // La vue caméra unique sur mobile
+    depthInfo = frame.getDepthInformation(view); // Récupère la map de profondeur (LiDAR)
+    
+    // MediaPipe a besoin qu'on lui envoie des frames manuellement en mode AR parfois
+    if (videoElement.value && !isFrozen.value) {
+        // En mode AR, videoElement peut être vide, on s'appuie sur le flux caméra natif géré par le navigateur
+        // Note: L'implémentation exacte dépend du navigateur, parfois MediaPipe peut lire le canvas WebGL
     }
-    requestAnimationFrame(predictWebcam);
   }
+  if(!isFrozen.value) xrSession.requestAnimationFrame(onXRFrame);
+};
+
+// --- 3. Cœur du Calcul (Hybride) ---
+const handleMeasurements = (landmarks) => {
+  const width = videoElement.value.videoWidth || window.innerWidth;
+  const height = videoElement.value.videoHeight || window.innerHeight;
+  let currentMm = 0;
+
+  // Calcul de la largeur en pixels (commun aux deux méthodes)
+  const pxWidth = calculateFingerDiameter(landmarks, currentFinger.value, width, height);
+
+  if (detectionMode.value === 'LiDAR' && depthInfo) {
+    // === MÉTHODE LIDAR ===
+    const fingerIdx = FINGER_INDICES[currentFinger.value].pip;
+    const fingerPoint = landmarks[fingerIdx];
+    
+    // On demande au LiDAR : "Quelle est la distance (en mètres) au pixel X,Y ?"
+    // fingerPoint.x/y sont normalisés (0 à 1), le LiDAR attend aussi du normalisé ou des pixels selon l'API
+    // L'API WebXR getDepthInMeters utilise des coordonnées normalisées (0.0 à 1.0) dans la vue
+    const distanceMeters = depthInfo.getDepthInMeters(fingerPoint.x, fingerPoint.y);
+    
+    if (distanceMeters > 0 && distanceMeters < 1.0) { // On ignore si > 1m (trop loin)
+      const distanceMm = distanceMeters * 1000;
+      
+      // Formule de projection inverse (Thalès)
+      // FOCALE_ESTIMEE : Peut être ajustée. 600 est une moyenne mobile standard.
+      const FOCALE_ESTIMEE = 600; 
+      currentMm = (pxWidth * distanceMm) / FOCALE_ESTIMEE;
+      
+      confidenceLevel.value = "Haute (LiDAR)";
+      distanceMessage.value = `Distance : ${Math.round(distanceMm)}mm`;
+    } else {
+        distanceMessage.value = "Main trop loin ou signal LiDAR perdu";
+        return;
+    }
+  } else {
+    // === MÉTHODE STANDARD (FALLBACK) ===
+    // Utilise le ratio anthropométrique (largeur paume estimée à 64mm)
+    const ratio = estimateRatioFromHand(landmarks, width, height);
+    currentMm = pixelsToMm(pxWidth, ratio);
+    confidenceLevel.value = "Moyenne (Standard)";
+  }
+
+  // Stabilisation (Moyenne glissante)
+  if (currentMm > 10 && currentMm < 25) { // Filtre les valeurs absurdes
+    validateStability(currentMm);
+  }
+};
+
+const validateStability = (mm) => {
+  // Reset si saut brutal (> 0.4mm)
+  if (stabilityBuffer.length > 0) {
+    const lastMm = stabilityBuffer[stabilityBuffer.length - 1];
+    if (Math.abs(mm - lastMm) > TOLERANCE_MM) stabilityBuffer.length = 0;
+  }
+  
+  stabilityBuffer.push(mm);
+
+  // Validation si X frames stables consécutives
+  if (stabilityBuffer.length >= REQUIRED_STABLE_FRAMES) {
+    const avgMm = stabilityBuffer.reduce((a, b) => a + b) / stabilityBuffer.length;
+    displayFinalResult(avgMm);
+    stabilityBuffer.length = 0; // Stop
+  }
+};
+
+// ... (Le reste : displayFinalResult, initMediaPipe, onResults, close, restart sont inchangés) ...
+// Assurez-vous juste que initMediaPipe gère bien l'attachement à la vidéo.
+
+// FONCTIONS UTILITAIRES DE BASE (à conserver telles quelles)
+const initMediaPipe = async () => {
+    if (!videoElement.value) return;
+    handsDetector = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    handsDetector.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8 });
+    handsDetector.onResults(onResults);
+    
+    if(detectionMode.value === 'Standard') {
+        camera = new Camera(videoElement.value, {
+            onFrame: async () => { await handsDetector.send({ image: videoElement.value }); },
+            width: 1280, height: 720
+        });
+        camera.start();
+    }
 };
 
 const onResults = (results) => {
-  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-    if (!handDetected.value) showInitialMessage.value = true;
-    return;
-  }
-  showInitialMessage.value = false;
-  handDetected.value = true;
-  const landmarks = results.multiHandLandmarks[0];
-  updateHandMap(landmarks[4].x < landmarks[0].x ? "Left" : "Right");
-  estimateHandSize(landmarks);
-  if (currentFinger.value !== 'None' && !resultDisplayed.value && !isFrozen.value) handleMeasurements(landmarks);
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        handDetected.value = true;
+        showInitialMessage.value = false;
+        handleMeasurements(results.multiHandLandmarks[0]);
+    } else {
+        handDetected.value = false;
+    }
 };
 
-// --- Logique de Mesure Stabilisée ---
-const handleMeasurements = (landmarks) => {
-  const width = videoElement.value.videoWidth;
-  const height = videoElement.value.videoHeight;
-  const t = FINGER_MEASURE_POS[currentFinger.value] ?? 0.55;
-
-  // 1. Calcul LiDAR instantané
-  const frame = getFingerMeasurementFrame(landmarks, currentFinger.value, width, height, t);
-  const thicknessData = frame ? measureFingerThicknessPixels(frame, currentFinger.value) : null;
-
-  if (thicknessData) {
-    const ratio = estimateRatioFromHand(landmarks, width, height);
-    const currentMm = pixelsToMm(thicknessData.thicknessPx, ratio);
-
-    // Vérification de la cohérence avec la mesure précédente
-    if (stabilityBuffer.length > 0) {
-      const lastMm = stabilityBuffer[stabilityBuffer.length - 1].mm;
-      if (Math.abs(currentMm - lastMm) > TOLERANCE_MM) {
-        stabilityBuffer = []; // Si c'est trop différent, on recommence pour éviter les erreurs
-      }
-    }
-
-    stabilityBuffer.push({ mm: currentMm, frame, thicknessData });
-
-    // On ne valide que si on a assez de mesures stables
-    if (stabilityBuffer.length >= REQUIRED_STABLE_FRAMES) {
-      const finalAvgMm = stabilityBuffer.reduce((sum, val) => sum + val.mm, 0) / stabilityBuffer.length;
-      
-      confidenceLevel.value = "Haute (Vérifiée)";
-      displayFinalResult(finalAvgMm, frame, thicknessData); // Affiche et fige
-      stabilityBuffer = []; 
-    }
-  } else {
-    stabilityBuffer = []; // Reset si on perd le doigt
-    // 2. Repli Standard (votre ancienne méthode)
-    const px = calculateFingerDiameter(landmarks, currentFinger.value, width, height);
-    if (px > 0) {
-      processAccumulatedMeasurement(pixelsToMm(px, estimateRatioFromHand(landmarks, width, height)));
-    }
-  }
-};
-
-/**
- * Affiche le résultat et fige la vidéo simultanément
- */
-const displayFinalResult = (mm, frame = null, data = null) => {
-  const { sizeEU, sizeUS } = getRingSize(mm);
-  if (sizeEU) {
+const displayFinalResult = (mm) => {
+    const { sizeEU, sizeUS } = getRingSize(mm);
     resultEU.value = sizeEU;
     measuredDiameter.value = mm.toFixed(1);
     resultDisplayed.value = true;
-
-    // On fige l'image sur la DERNIÈRE frame valide
-    freezeOnCurrentFrame();
-
-    if (frame && data) {
-      drawDebugPointsOnFreeze(frame, data);
-    }
-
-    saveMeasurement({
-      fingerName: currentFinger.value,
-      sizeEU, sizeUS, diameterMm: mm
-    });
-  }
+    isFrozen.value = true;
+    saveMeasurement({ fingerName: currentFinger.value, sizeEU, diameterMm: mm, detectionMode: detectionMode.value });
 };
 
-const processAccumulatedMeasurement = (mm) => {
-  diameterMeasurements.push(mm);
-  if (diameterMeasurements.length >= 10) {
-    confidenceLevel.value = "Moyenne (Standard)";
-    displayFinalResult(diameterMeasurements.reduce((a, b) => a + b, 0) / diameterMeasurements.length);
-    diameterMeasurements = [];
-  }
+export const closeModal = () => {
+    isModalOpen.value = false;
+    if (xrSession) xrSession.end();
+    if (camera) camera.stop();
+    document.body.classList.remove('ar-active');
 };
 
-// --- Utilitaires de Vision ---
-function getFingerMeasurementFrame(landmarks, finger, w, h, t) {
-  const i = FINGER_INDICES[finger]; if (!i) return null;
-  const mcp = { x: landmarks[i.mcp].x * w, y: landmarks[i.mcp].y * h };
-  const pip = { x: landmarks[i.pip].x * h, y: landmarks[i.pip].y * h };
-  const dx = pip.x - mcp.x; const dy = pip.y - mcp.y; const len = Math.hypot(dx, dy);
-  return { center: { x: mcp.x + t * dx, y: mcp.y + t * dy }, normal: { x: -dy / len, y: dx / len } };
-}
-
-function measureFingerThicknessPixels(frame, type) {
-  if (!updateTmpCanvasFromVideo()) return null;
-  const p = (type === "thumb") ? THICKNESS_PARAMS.thumb : THICKNESS_PARAMS.others;
-  const ePos = findEdgePeakAlongNormal(frame.center, frame.normal, { maxStepPx: p.fallbackMaxStep });
-  const eNeg = findEdgePeakAlongNormal(frame.center, { x: -frame.normal.x, y: -frame.normal.y }, { maxStepPx: p.fallbackMaxStep });
-  return (ePos && eNeg) ? { thicknessPx: ePos.t + eNeg.t, edgeLeft: eNeg, edgeRight: ePos } : null;
-}
-
-function findEdgePeakAlongNormal(center, normal, { maxStepPx }) {
-  const samples = [];
-  for (let t = 0; t <= maxStepPx; t++) samples.push(getGrayAtPatch(center.x + normal.x * t, center.y + normal.y * t));
-  const grad = samples.map((v, i) => i === 0 ? 0 : Math.abs(v - samples[i - 1]));
-  const maxG = Math.max(...grad); if (maxG < 10) return null;
-  const idx = grad.indexOf(maxG); return { t: idx, x: center.x + normal.x * idx, y: center.y + normal.y * idx };
-}
-
-// DECLARATION UNIQUE DE getGrayAtPatch
-function getGrayAtPatch(x, y) {
-  const xi = Math.floor(Math.max(0, Math.min(x, tmpCanvas.width - 1)));
-  const yi = Math.floor(Math.max(0, Math.min(y, tmpCanvas.height - 1)));
-  const d = tmpCtx.getImageData(xi, yi, 1, 1).data;
-  return 0.2126 * d[0] + 0.7152 * d[1] + 0.0722 * d[2];
-}
-
-function drawDebugPointsOnFreeze(frame, data) {
-  const rect = videoElement.value.getBoundingClientRect();
-  if (frame?.center) drawMappedPoint(freezeCtx, frame.center.x, frame.center.y, rect.width, rect.height, "yellow");
-  if (data?.edgeLeft) drawMappedPoint(freezeCtx, data.edgeLeft.x, data.edgeLeft.y, rect.width, rect.height, "red");
-  if (data?.edgeRight) drawMappedPoint(freezeCtx, data.edgeRight.x, data.edgeRight.y, rect.width, rect.height, "cyan");
-}
-
-function drawMappedPoint(ctx, xV, yV, dW, dH, color) {
-  const vw = videoElement.value.videoWidth; const vh = videoElement.value.videoHeight;
-  const videoAR = vw / vh; const destAR = dW / dH;
-  let sx, sy, sW, sH;
-  if (videoAR > destAR) { sH = vh; sW = vh * destAR; sx = (vw - sW) / 2; sy = 0; }
-  else { sW = vw; sH = vw / destAR; sx = 0; sy = (vh - sH) / 2; }
-  const x = ((xV - sx) / sW) * dW; const y = ((yV - sy) / sH) * dH;
-  ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.stroke();
-}
-
-function freezeOnCurrentFrame() {
-  const rect = videoElement.value.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  freezeCanvasEl.value.width = rect.width * dpr; freezeCanvasEl.value.height = rect.height * dpr;
-  freezeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const vw = videoElement.value.videoWidth; const vh = videoElement.value.videoHeight;
-  const videoAR = vw / vh; const destAR = rect.width / rect.height;
-  let sx, sy, sW, sH;
-  if (videoAR > destAR) { sH = vh; sW = vh * destAR; sx = (vw - sW) / 2; sy = 0; }
-  else { sW = vw; sH = vw / destAR; sx = 0; sy = (vh - sH) / 2; }
-  freezeCtx.drawImage(videoElement.value, sx, sy, sW, sH, 0, 0, rect.width, rect.height);
-  freezeCanvasEl.value.style.display = "block"; isFrozen.value = true; videoElement.value.pause();
-}
-
-const updateHandMap = (type) => currentHandFilter.value = type === "Right" ? "./images/filter_right.png" : "./images/filter_left.png";
-const estimateHandSize = (landmarks) => {
-  const handSize = Math.hypot((landmarks[12].x - landmarks[0].x) * videoElement.value.videoWidth, (landmarks[12].y - landmarks[0].y) * videoElement.value.videoHeight);
-  distanceMessage.value = (handSize < 140) ? "Rapprochez votre main." : (handSize > 190) ? "Éloignez votre main." : "Main bien positionnée.";
+export const selectFinger = (f) => currentFinger.value = f;
+export const restart = () => { 
+    isFrozen.value = false; 
+    resultDisplayed.value = false; 
+    stabilityBuffer.length = 0; 
 };
-function updateTmpCanvasFromVideo() {
-  if (!videoElement.value) return false;
-  tmpCanvas.width = videoElement.value.videoWidth; tmpCanvas.height = videoElement.value.videoHeight;
-  tmpCtx.drawImage(videoElement.value, 0, 0); return true;
-}

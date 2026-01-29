@@ -9,7 +9,7 @@ const {
   isModalOpen, showInitialMessage, handDetected, videoElement, freezeCanvasEl,
   debugCanvasEl, currentFinger, currentHandFilter, distanceMessage,
   resultDisplayed, isFrozen, resultEU, measuredDiameter, confidenceLevel,
-  FINGERS_CONFIG, openModal, closeModal, resumeMeasurement, restart, selectFinger
+  detectionMode, FINGERS_CONFIG, openModal, closeModal, resumeMeasurement, restart, selectFinger
 } = logic;
 
 onUnmounted(() => logic.closeModal());
