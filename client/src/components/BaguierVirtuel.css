@@ -1,107 +1,114 @@
+/* BaguierVirtuel.css */
+
 .baguier-root {
   margin: 0; padding: 0; 
   display: flex; justify-content: center; align-items: center;
-  height: 100dvh; /* Utilise la hauteur dynamique du mobile */
+  height: 100dvh;
   width: 100vw;
-  overflow: hidden; /* Empêche le décalage de page */
+  overflow: hidden;
   position: fixed;
   top: 0; left: 0;
-}
-#openModalButton {
-  padding: 10px 20px; background-color: #4CAF50; color: white; border: none;
-  border-radius: 5px; cursor: pointer; font-size: 18px;
+  /* Fond par défaut (Mode Standard) */
+  background-color: rgba(0,0,0,0.5); 
 }
 
-#openModalButton:hover { background-color: #000; }
-
-.modal {
-  position: fixed; z-index: 1000; 
-  inset: 0; /* Remplace top/left/width/height pour un centrage parfait */
-  background-color: rgba(0, 0, 0, 0.5); 
-  display: flex; justify-content: center; align-items: center;
-  padding: 10px; /* Marge de sécurité sur les bords */
-}
-
+/* === MODE STANDARD (Classique) === */
 .modal-content {
   background-color: #fff; 
-  width: 100%; 
-  max-width: none; 
-  height: 100%;
-  border-radius: 0;
+  width: 100%; height: 100%;
   position: relative; 
   padding: 20px; 
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  overflow-y: auto; /* Permet de scroller à l'intérieur de la modale si nécessaire */
+  display: flex; flex-direction: column; align-items: center;
 }
-
-.close { color: #aaa; position: absolute; top: 10px; right: 15px; font-size: 28px; font-weight: bold; cursor: pointer; }
-.close:hover { color: black; text-decoration: none; }
 
 #videoContainer { 
   position: relative; 
   width: 100%; 
-  max-height: 60vh; /* Limite la hauteur de la vidéo sur mobile */
+  max-height: 60vh; 
   aspect-ratio: 9 / 16;
   overflow: hidden; 
-  background-color: black;
+  background-color: black; /* Fond noir derrière la vidéo standard */
   margin: 10px 0;
+  border-radius: 10px;
 }
 
-#video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-
-#handMap { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0.5; pointer-events: none; z-index: 10; }
-
-.finger-button { margin: 3px; padding: 12px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; font-size: 14px; }
-.finger-button:hover { background-color: #000; }
-.selected { background-color: #4CAF50; color: white; border: 2px solid #000; }
-
-#initialMessage {
-  display: flex; justify-content: center; align-items: center; width: 350px; height: 660px;
-  background-color: #000; color: #fff; font-size: 22px; text-align: center; pointer-events: none;
-  animation: fadeOut 10s forwards; position: absolute; z-index: 1000; top: 50%; left: 50%;
-  transform: translate(-50%, -50%); opacity: 1; padding: 25px; font-family: arial; line-height: 1.2;
+#video { 
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+  object-fit: cover; transform: scaleX(-1); 
 }
 
-@keyframes fadeOut { 0% { opacity: 1; } 80% { opacity: 0.7; } 100% { opacity: 0; visibility: hidden; } }
+/* === MODE LIDAR / AR (Transparence Totale) === */
+/* Quand la classe 'ar-active' est présente sur le BODY */
+
+body.ar-active,
+body.ar-active #app,
+body.ar-active .baguier-root,
+body.ar-active .modal-content {
+    background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+}
+
+/* En AR, on rend le conteneur vidéo transparent */
+body.ar-active #videoContainer {
+    background: transparent !important;
+    border: 2px solid rgba(255, 255, 255, 0.3); /* Cadre léger pour se repérer */
+}
+
+/* En AR, on cache la balise VIDEO (car c'est le navigateur qui affiche le flux en fond) */
+/* Mais on garde 'visibility: visible' pour que MediaPipe puisse lire les pixels */
+body.ar-active #video {
+    opacity: 0 !important;
+}
+
+/* Éléments d'interface (toujours visibles) */
+#openModalButton {
+  padding: 10px 20px; background-color: #4CAF50; color: white; border: none;
+  border-radius: 5px; cursor: pointer; font-size: 18px; z-index: 100;
+}
+
+.close { 
+    color: #333; position: absolute; top: 10px; right: 15px; 
+    font-size: 28px; font-weight: bold; cursor: pointer; z-index: 200;
+}
+/* En AR, la croix doit être blanche pour être visible sur la caméra */
+body.ar-active .close { color: white; text-shadow: 0 0 5px black; }
+
+.finger-button { 
+    margin: 3px; padding: 12px; cursor: pointer; 
+    background-color: rgba(76, 175, 80, 0.9); /* Un peu de transparence */
+    color: white; border: none; border-radius: 5px; font-size: 14px; 
+}
+.selected { background-color: #2E7D32; border: 2px solid #fff; }
 
 #resultCircle {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
   display: flex; flex-direction: column; justify-content: center; align-items: center;
-  color: green; font-size: 24px; font-family: Arial, sans-serif; text-align: center; z-index: 2000;
+  z-index: 2000;
 }
 
 .result-bubble {
-  border-radius: 50%; width: 250px; height: 250px; opacity: .95; display: block;
-  background-color: black; display: flex; flex-direction: column; justify-content: center;
-  align-items: center; color: green; font-size: 24px; text-align: center;
+  border-radius: 50%; width: 250px; height: 250px; 
+  background-color: rgba(0, 0, 0, 0.85); /* Fond sombre pour lire le résultat */
+  display: flex; flex-direction: column; justify-content: center;
+  align-items: center; color: #4CAF50; font-size: 24px; text-align: center;
+  backdrop-filter: blur(5px);
+}
+
+#handMap { 
+    display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+    opacity: 0.5; pointer-events: none; z-index: 10; 
+}
+
+#freezeCanvas { 
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+    z-index: 20; display: none; pointer-events: none; transform: scaleX(-1); 
+    border-radius: 10px;
 }
 
 #newMeasurementButton {
-  padding: 10px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 5px;
-  cursor: pointer; position: absolute; bottom: -50px; left: 50%; transform: translateX(-50%);
-  z-index: 21; width: 150px;
-}
-
-#distanceCircle {
-  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  display: flex; flex-direction: column; justify-content: center; align-items: center;
-  color: green; font-size: 24px; text-align: center; z-index: 1000;
-  width: 250px; height: 250px; border-radius: 50%; opacity: 0.9;
+  padding: 10px; background-color: #4CAF50; color: white; border: none; 
+  border-radius: 5px; cursor: pointer; margin-top: 15px; width: 150px;
 }
 
 .hidden { display: none !important; }
-
-/* Styles LiDAR (ajoutés discrètement pour ne pas gêner) */
-#freezeCanvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; display: none; pointer-events: none; transform: scaleX(-1); }
-#resumeBtn {
-  position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-  z-index: 60; padding: 10px 14px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;
-}
-
-body.ar-active, body.ar-active .modal, body.ar-active .modal-content {
-    background-color: transparent !important;
-}
-body.ar-active video { opacity: 0; }
