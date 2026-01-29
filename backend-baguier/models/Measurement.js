@@ -1,56 +1,31 @@
 const mongoose = require('mongoose');
 
+// Schema for ring size measurements and app events
 const MeasurementSchema = new mongoose.Schema({
-    // Client Identifier (Brand name) - Required to separate data
-    clientId: { 
-        type: String, 
-        required: true 
-    },
-
-    // Selected Finger
-    fingerName: { 
-        type: String, 
-        required: true 
-    },
-
-    // Measured Ring Size (EU Standard)
-    sizeEU: { 
-        type: Number, 
-        required: true 
-    },
-
-    // Measured Ring Size (US Standard)
-    sizeUS: { 
-        type: Number 
-    },
-
-    // Diameter in millimeters
-    diameterMm: { 
-        type: Number 
-    },
-
-    // Technology used: 'LiDAR' or 'Standard' 
-    detectionMode: { 
-        type: String, 
-        enum: ['LiDAR', 'Standard'], 
-        default: 'Standard' 
-    },
-
-    // Device information
-    deviceModel: { 
-        type: String 
-    },
-
-    // How long the user spent measuring (in seconds)
-    sessionDurationSeconds: { 
-        type: Number 
-    },
-
-    // Timestamp
-    createdAt: { 
-        type: Date, 
-        default: Date.now 
-    }
+    // Brand or client name from URL
+    clientId: { type: String, required: true },
+    
+    // Type of log: 'open' (app started) or 'success' (measurement completed)
+    eventType: { type: String, default: 'success' }, 
+    
+    fingerName: { type: String },
+    sizeEU: { type: Number },
+    sizeUS: { type: Number },
+    diameterMm: { type: Number },
+    
+    // Tech mode used: LiDAR (iPhone Pro) or Standard (Camera)
+    detectionMode: { type: String, enum: ['LiDAR', 'Standard'], default: 'Standard' },
+    
+    // Browser/Device details
+    deviceModel: { type: String },
+    
+    sessionDurationSeconds: { type: Number },
+    
+    // Number of measurement attempts during the session
+    attemptsCount: { type: Number, default: 1 }, 
+    
+    // Automatic timestamp
+    createdAt: { type: Date, default: Date.now }
 });
 
 // Export the model
