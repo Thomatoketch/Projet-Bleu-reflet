@@ -169,11 +169,7 @@ const displayFinalResult = (mm) => {
         const ctx = freezeCanvasEl.value.getContext('2d');
         
         // On dessine l'image actuelle de la vidéo dans le canvas (avec effet miroir)
-        ctx.save();
-        ctx.translate(width, 0);
-        ctx.scale(-1, 1);
         ctx.drawImage(videoElement.value, 0, 0, width, height);
-        ctx.restore();
         
         // On affiche le canvas figé et on cache la vidéo pour économiser les ressources
         freezeCanvasEl.value.style.display = 'block';
