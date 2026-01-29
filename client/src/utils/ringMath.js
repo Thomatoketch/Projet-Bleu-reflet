@@ -56,14 +56,22 @@ export function calculateFingerDiameter(landmarks, fingerKey, width, height) {
     // --- CORRECTION POUCE ---
     if (fingerKey === 'thumb') {
         // On mesure la base Index/Majeur (très stable)
-        // On a réduit le coefficient à 1.0 (le pouce est souvent aussi large que cet espace)
         p1_idx = 5; // Index MCP
         p2_idx = 9; // Middle MCP
         correction = 1.0; 
     } 
     else if (fingerKey === 'index') { p1_idx = 5; p2_idx = 9; }
     else if (fingerKey === 'middle') { p1_idx = 9; p2_idx = 13; }
-    else if (fingerKey === 'ring') { p1_idx = 13; p2_idx = 17; }
+    
+    // === MODIFICATION ICI ===
+    else if (fingerKey === 'ring') { 
+        p1_idx = 13; // Ring MCP
+        p2_idx = 17; // Pinky MCP
+        // On applique une réduction de 7% à 10% pour compenser l'écartement des os
+        correction = 0.90; 
+    }
+    // ========================
+
     else if (fingerKey === 'pinky') { 
         p1_idx = 13; p2_idx = 17; 
         correction = 0.85; // Le petit doigt est plus fin

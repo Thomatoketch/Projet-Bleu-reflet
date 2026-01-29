@@ -9,8 +9,14 @@ const Measurement = require('./models/Measurement');
 
 const app = express();
 
+app.use((req, res, next) => {
+    res.setHeader("Content-Security-Policy", "frame-ancestors *");
+    next();
+});
+
 app.use(cors());
 app.use(express.json());
+
 
 // Database Connection
 const uri = process.env.MONGO_URI;
@@ -22,6 +28,8 @@ mongoose.connect(uri)
 app.get('/', (req, res) => {
     res.send('API is running...');
 });
+
+
 
 // 2. Save Route
 app.post('/api/measurements', async (req, res) => {

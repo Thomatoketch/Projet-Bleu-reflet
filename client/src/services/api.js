@@ -15,7 +15,7 @@ export async function saveMeasurement(data) {
         sizeEU: data.sizeEU,
         sizeUS: data.sizeUS,
         diameterMm: data.diameterMm,
-        detectionMode: "Standard",
+        detectionMode: data.detectionMode,
         deviceModel: navigator.userAgent,
         sessionDurationSeconds: 0 
     };
