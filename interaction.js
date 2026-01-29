@@ -274,8 +274,13 @@ function clearMeasurements() {
     document.getElementById('newMeasurementButton').classList.add('hidden'); // Cache le bouton "Nouvelle Mesure"
 }
 
+// Global trackers
+let attempts = 1; 
+
 // Fonction pour relancer une nouvelle mesure sans recharger la page
 function restart() {
+    // Increase number of attempts
+    attempts++;
     // Reset all necessary variables and elements
     clearMeasurements(); 
     resultDisplayed = false;
@@ -339,37 +344,50 @@ function getSize(diameter) {
 
 // --- BACKEND CONNECTION ---
 
+// Helper to extract client name from URL query
 function getClientId() {
     const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get('client') || 'Unknown_Client';
+    return urlParams.get('client') || 'Default_Brand';
 }
 
-// Send data to your Node.js Server
-async function sendDataToBackend(sizeEU, sizeUS, diameter) {
-    const measurementData = {
+/**
+ * Sends data to the Node.js backend
+ * @param {Number} sizeEU - Measured EU size
+ * @param {Number} sizeUS - Measured US size
+ * @param {Number} diameter - Diameter in mm
+ * @param {String} type - 'success' or 'open'
+ */
+async function sendDataToBackend(sizeEU, sizeUS, diameter, type = 'success') {
+    const payload = {
         clientId: getClientId(),
+        eventType: type,
         fingerName: currentFinger,
         sizeEU: sizeEU,
         sizeUS: sizeUS,
         diameterMm: diameter,
+        attemptsCount: attempts,
         detectionMode: "Standard",
-        deviceModel: navigator.userAgent, 
-        sessionDurationSeconds: 0 
+        deviceModel: navigator.userAgent
     };
 
-    console.log("Sending data to backend...", measurementData);
-
     try {
-        // ⚠️ Change localhost to your real server URL when hosting online
-        const response = await fetch('http://localhost:3000/api/measurements', {
+        await fetch('http://localhost:3000/api/measurements', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(measurementData)
+            body: JSON.stringify(payload),
+            keepalive: true // Data sent even if page closes
         });
-        
-        const result = await response.json();
-        console.log("✅ Data saved in MongoDB:", result);
-    } catch (error) {
-        console.error("❌ Error sending data:", error);
+        console.log(`✅ Event [${type}] tracked successfully`);
+    } catch (err) {
+        console.error("❌ Backend sync failed", err);
     }
 }
+
+
+// Detect if user leaves before finishing (Abandon)
+window.addEventListener('pagehide', () => {
+    // If the measurement result hasn't been displayed yet, it's an abandon
+    if (typeof resultDisplayed !== 'undefined' && !resultDisplayed) {
+        sendDataToBackend(null, null, null, 'abandon');
+    }
+}); 
