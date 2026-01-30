@@ -17,13 +17,15 @@
           en veillant à ce que tous les bords de votre main soient bien dans les limites du cadre vert.
         </div>
 
-        <div id="videoContainer">
+        <div id="videoContainer" :class="{ mirrored: isUserFacing }">
           <video ref="videoElement" id="video" autoplay playsinline muted></video>
 
           <!-- Canvas de freeze + debug (du code 2) -->
           <canvas ref="freezeCanvasEl" id="freezeCanvas"></canvas>
           <canvas ref="debugCanvasEl" id="debugCanvas"></canvas>
-
+  
+          <!-- 🔄 Switch caméra -->
+          <button style="position:absolute; top:10px; right:10px; z-index:70; padding:6px 10px;" @click="switchCamera">🔄 Cam</button>
           <!-- Bouton reprendre (du code 2) -->
           <button id="resumeBtn" @click="resumeMeasurement" v-show="isFrozen">
             Reprendre la mesure
@@ -48,6 +50,15 @@
               <span v-if="resultEU != null" class="result-bubble">
                 {{ resultEU }} EU | {{ resultUS }} US
               </span>
+              <div class="methodText">
+                {{
+                  measurementMethod === 'lidar'
+                    ? 'Avec LiDAR'
+                    : measurementMethod === 'hand-scale'
+                      ? 'Sans LiDAR (estimation)'
+                      : 'Sans LiDAR'
+                }}
+              </div>
             </span>
 
             <button
@@ -100,6 +111,12 @@ const resultEU = ref(null);
 const resultUS = ref(null);
 
 const isFrozen = ref(false);
+
+const desiredFacingMode = ref("environment"); // ✅ arrière par défaut
+const isUserFacing = ref(false);              // miroir uniquement si caméra avant
+
+const measurementMethod = ref("unknown"); 
+// "lidar" | "hand-scale" | "none" | "unknown"
 
 // ==============================
 // DOM Refs (adaptés au naming code 1)
@@ -563,13 +580,16 @@ function handleMeasurements(landmarks) {
 
   if (!thicknessData) return;
 
-  const { mm: diameterMm } = computeDiameterMm({
+  const { mm: diameterMm, method } = computeDiameterMm({
     thicknessPx: thicknessData.thicknessPx,
     frameCenterPx: frame.center,
     landmarks,
     vw,
     vh,
   });
+
+  measurementMethod.value = method;
+  console.log("[MEASURE] method =", method, "diameterMm =", diameterMm);
 
   if (diameterMm == null || !Number.isFinite(diameterMm)) return;
 
@@ -632,6 +652,7 @@ function resumeMeasurement() {
   resultEU.value = null;
   resultUS.value = null;
   currentFinger.value = "None";
+  measurementMethod.value = "unknown";
 }
 
 function restart() {
@@ -649,6 +670,8 @@ function restart() {
   currentFinger.value = "None";
   showInitialMessage.value = true;
   handDetected.value = false;
+
+  measurementMethod.value = "unknown";
 
   hideDistanceMessage();
   setTimeout(() => { handDetected.value = true; }, 100);
@@ -670,7 +693,7 @@ function drawLandmarkIndices(landmarks) {
   debugCtx.lineWidth = 3;
 
   for (let i = 0; i < landmarks.length; i++) {
-    const p = mapVideoToCover(landmarks[i].x * vw, landmarks[i].y * vh, dw, dh, true);
+    const p = mapVideoToCover(landmarks[i].x * vw, landmarks[i].y * vh, dw, dh, isUserFacing.value);
     debugCtx.beginPath();
     debugCtx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
     debugCtx.fill();
@@ -729,7 +752,7 @@ function drawDebugPointsOnFreeze(frame, thicknessData) {
   const W = rect.width;
   const H = rect.height;
 
-  const mirror = false;
+  const mirror = isUserFacing.value;
   freezeCtx.lineWidth = 4;
 
   if (frame?.center) {
@@ -745,6 +768,17 @@ function drawDebugPointsOnFreeze(frame, thicknessData) {
   const leftOk = !!thicknessData?.edgeLeft;
   const rightOk = !!thicknessData?.edgeRight;
 
+}
+
+async function switchCamera() {
+  desiredFacingMode.value =
+    (desiredFacingMode.value === "environment") ? "user" : "environment";
+
+  isUserFacing.value = (desiredFacingMode.value === "user");
+
+  stopMediaPipe();
+  await nextTick();
+  initMediaPipe();
 }
 
 function getCoverCrop(vw, vh, displayW, displayH) {
@@ -778,7 +812,8 @@ async function initMediaPipe() {
   debugCtx = debugCanvasEl.value.getContext("2d");
 
   hands = new Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
   });
 
   hands.setOptions({
@@ -790,14 +825,19 @@ async function initMediaPipe() {
 
   hands.onResults(onHandResults);
 
+  // ✅ ICI : on synchronise le mode caméra → miroir ou non
+  isUserFacing.value = (desiredFacingMode.value === "user");
+
   camera = new Camera(videoElement.value, {
     onFrame: async () => {
       await hands.send({ image: videoElement.value });
     },
+    facingMode: desiredFacingMode.value, // "environment" ou "user"
   });
 
   camera.start();
 }
+
 
 function stopMediaPipe() {
   try { if (camera?.stop) camera.stop(); } catch {}
@@ -911,13 +951,16 @@ onUnmounted(() => {
   background-color: black;
 }
 
+#videoContainer.mirrored #video { transform: scaleX(-1); }
+#videoContainer.mirrored #freezeCanvas { transform: scaleX(-1); }
+
 #video {
   position: absolute;
   top: 0; left: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1);
+  transform: none;
 }
 
 #handMap {
@@ -1022,6 +1065,13 @@ h1 {
   z-index: 20;
 }
 
+.methodText{
+  margin-top: 10px;
+  font-size: 14px;
+  opacity: 0.9;
+  color: #9aff9a;
+}
+
 #newMeasurementButton {
   padding: 10px 10px;
   background-color: #4CAF50;
@@ -1076,7 +1126,7 @@ h1 {
   z-index: 20;
   display: none;
   pointer-events: none;
-  transform: scaleX(-1);
+  transform: none;
 }
 
 #resumeBtn {
