@@ -33,3 +33,28 @@ a,
     padding: 0 2rem;
   }
 }
+
+/* 1. Force le message d'instruction à être NOIR et OPAQUE */
+#initialMessage {
+    background-color: #000 !important; /* Fond noir forcé */
+    color: white !important;
+    opacity: 1 !important; /* Toujours visible */
+    visibility: visible !important;
+    animation: none !important; /* On enlève le fondu automatique de 10s */
+    z-index: 9999 !important; /* Toujours au premier plan */
+    border-radius: 20px; /* Un peu plus joli */
+    border: 2px solid white; /* Pour bien le détacher de la caméra */
+}
+
+/* 2. Si vous parlez du fond grisé derrière la fenêtre (le "dimmer") */
+/* On le remet légèrement visible même en AR pour détacher l'interface */
+body.ar-active .modal {
+    background-color: rgba(0, 0, 0, 0.3) !important; /* Noir à 30% de transparence */
+}
+
+/* 3. On s'assure que le contenu de la modale est transparent 
+   SAUF le message d'instruction géré au-dessus */
+body.ar-active .modal-content {
+    background: transparent !important;
+    box-shadow: none !important;
+}

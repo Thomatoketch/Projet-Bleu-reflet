@@ -9,14 +9,15 @@ const Measurement = require('./models/Measurement');
 
 const app = express();
 
+// Middleware de sécurité pour autoriser l'affichage dans une iframe (CRUCIAL pour le projet)
 app.use((req, res, next) => {
     res.setHeader("Content-Security-Policy", "frame-ancestors *");
     next();
 });
 
+// Middleware standards
 app.use(cors());
 app.use(express.json());
-
 
 // Database Connection
 const uri = process.env.MONGO_URI;
@@ -29,15 +30,13 @@ app.get('/', (req, res) => {
     res.send('API is running...');
 });
 
-
-
 // 2. Save Route
 app.post('/api/measurements', async (req, res) => {
     try {
         const newMeasurement = new Measurement(req.body);
         const savedMeasurement = await newMeasurement.save();
         
-        console.log("✅ New measurement saved:", savedMeasurement);
+        console.log("✅ New measurement/event saved:", savedMeasurement);
         res.status(201).json(savedMeasurement);
     } catch (error) {
         console.error("❌ Error saving measurement:", error);
@@ -51,12 +50,15 @@ app.get('/api/export', async (req, res) => {
         // Get all data from MongoDB
         const measurements = await Measurement.find({});
 
+        // Define columns for the CSV file (including new tracking fields)
         const fields = [
             'clientId', 
+            'eventType',       // Nouveau champ
             'fingerName', 
             'sizeEU', 
             'sizeUS', 
             'diameterMm', 
+            'attemptsCount',   // Nouveau champ
             'detectionMode', 
             'deviceModel', 
             'createdAt'
@@ -67,7 +69,7 @@ app.get('/api/export', async (req, res) => {
 
         // Send file to download
         res.header('Content-Type', 'text/csv');
-        res.attachment('baguier_stats.csv');
+        res.attachment('baguier_analytics.csv'); // Nom mis à jour
         res.send(csv);
 
     } catch (error) {
@@ -75,7 +77,6 @@ app.get('/api/export', async (req, res) => {
         res.status(500).send("Error exporting data");
     }
 });
-
 
 // Start Server
 const PORT = process.env.PORT || 3000;
