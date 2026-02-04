@@ -1,0 +1,58 @@
+<div class="baguier-root">
+    <div id="appcov" v-show="!isModalOpen">
+        <button id="openModalButton" @click="openModal">Ouvrir l'Application</button>
+    </div>
+
+    <div id="modal" class="modal" :style="{ display: isModalOpen ? 'flex' : 'none' }">
+        <div class="modal-content">
+            <span class="close" @click="closeModal">&times;</span>
+            <h1>Votre baguier virtuel</h1>
+
+            <div id="initialMessage" v-show="showInitialMessage">
+                Veuillez positionner votre main de manière à ce qu'elle s'aligne parfaitement avec la silhouette
+                affichée à l'écran.
+            </div>
+
+            <div id="videoContainer">
+                <video ref="videoElement" id="video" autoplay playsinline muted></video>
+
+                <canvas ref="freezeCanvasEl" id="freezeCanvas"></canvas>
+                <canvas ref="debugCanvasEl" id="debugCanvas"></canvas>
+
+                <button id="resumeBtn" @click="resumeMeasurement" v-show="isFrozen">
+                    Reprendre la mesure
+                </button>
+
+                <img id="handMap" :src="currentHandFilter" alt="Contour de la main"
+                    :style="{ display: handDetected ? 'block' : 'none' }">
+
+                <div id="distanceCircle" :class="{ hidden: !distanceMessage }">
+                    <span id="distanceText">{{ distanceMessage }}</span>
+                </div>
+
+                <div id="resultCircle" :class="{ hidden: !resultDisplayed }">
+                    <span id="resultText">
+                        <span v-if="resultEU" class="result-bubble">
+                            <span style="font-size: 1.8rem; display:block;">{{ resultEU }}</span>
+                            <span style="font-size: 0.8rem; display:block; margin-top:5px;">Ø {{ measuredDiameter }}
+                                mm</span>
+                            <span style="font-size: 0.7rem; display:block; opacity:0.8; margin-top:5px;">
+                                Mode : {{ detectionMode }} | Confiance : {{ confidenceLevel }}
+                            </span>
+                        </span>
+                    </span>
+                    <button id="newMeasurementButton" :class="{ hidden: !resultDisplayed }" @click="restart">
+                        Recommencer
+                    </button>
+                </div>
+            </div>
+
+            <div id="fingerSelection">
+                <button v-for="finger in FINGERS_CONFIG" :key="finger.key" class="finger-button"
+                    :class="{ selected: currentFinger === finger.key }" @click="selectFinger(finger.key)">
+                    {{ finger.label }}
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
